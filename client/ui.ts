@@ -1,5 +1,13 @@
-import { def } from '@shared/cards';
-import type { PrivateMatchState, Seat } from '@shared/types';
+import {
+  TYPE_COLOR,
+  TYPE_SHORT,
+  comboProgress,
+  def,
+  FACTION_NAME,
+  SEAT_FACTION,
+} from '@shared/cards';
+import type { CardId, CardType, PrivateMatchState, Seat, VisiblePlayed } from '@shared/types';
+import type { LightId } from './table/scene';
 
 export function h<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -19,11 +27,85 @@ export function button(label: string, onClick: () => void, kind: 'primary' | 'gh
   return b;
 }
 
+const LIGHT_SLIDERS: { id: LightId; label: string }[] = [
+  { id: 'hemi', label: 'Hemi' },
+  { id: 'key', label: 'Key' },
+  { id: 'fill', label: 'Fill' },
+];
+
+export function renderSettings(
+  parent: HTMLElement,
+  lights: Record<LightId, number>,
+  onLight: (id: LightId, value: number) => void,
+): void {
+  const wrap = h('aside', 'settings');
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'settings-toggle';
+  toggle.setAttribute('aria-label', 'Settings');
+  toggle.setAttribute('aria-expanded', 'false');
+  toggle.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68 1.65 1.65 0 0 0 10 3.17V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+
+  const menu = h('div', 'settings-menu');
+  menu.hidden = true;
+  menu.append(h('header', 'settings-head', 'Settings'));
+
+  const lightsSection = h('section', 'settings-section');
+  lightsSection.append(h('h3', 'settings-section-title', 'Lights'));
+  for (const { id, label } of LIGHT_SLIDERS) {
+    const row = h('label', 'settings-row');
+    const name = h('span', 'settings-name', label);
+    const value = h('span', 'settings-val', lights[id].toFixed(2));
+    const input = document.createElement('input');
+    input.className = 'settings-slider';
+    input.type = 'range';
+    input.min = '0';
+    input.max = '4';
+    input.step = '0.01';
+    input.value = String(lights[id]);
+    input.setAttribute('aria-label', `${label} light intensity`);
+    input.addEventListener('input', () => {
+      const n = Number(input.value);
+      value.textContent = n.toFixed(2);
+      onLight(id, n);
+    });
+    row.append(name, input, value);
+    lightsSection.append(row);
+  }
+  menu.append(lightsSection);
+
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape') setOpen(false);
+  };
+
+  const setOpen = (open: boolean): void => {
+    menu.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+    wrap.classList.toggle('open', open);
+    if (open) window.addEventListener('keydown', onKey);
+    else window.removeEventListener('keydown', onKey);
+  };
+
+  toggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setOpen(menu.hidden);
+  });
+  wrap.addEventListener('pointerdown', (e) => e.stopPropagation());
+  parent.addEventListener('pointerdown', () => {
+    if (!menu.hidden) setOpen(false);
+  });
+
+  wrap.append(toggle, menu);
+  parent.append(wrap);
+}
+
 export function renderHome(root: HTMLElement, actions: {
   onCreate(name: string): void;
   onJoin(code: string, name: string): void;
   onSpectate(code: string): void;
   onHotseat(): void;
+  onBot(): void;
 }): void {
   root.replaceChildren();
   const wrap = h('div', 'screen home');
@@ -52,7 +134,8 @@ export function renderHome(root: HTMLElement, actions: {
 
   const panel = h('div', 'panel');
   panel.append(name);
-  panel.append(button('Create room', () => actions.onCreate(name.value), 'gold'));
+  panel.append(button('Play vs AI', () => actions.onBot(), 'gold'));
+  panel.append(button('Create room', () => actions.onCreate(name.value)));
   panel.append(code);
   const row = h('div', 'row');
   row.append(button('Join room', () => actions.onJoin(code.value, name.value)));
@@ -65,6 +148,9 @@ export function renderHome(root: HTMLElement, actions: {
   loop.innerHTML =
     '<span class="t-taunt">Taunt</span> → <span class="t-guard">Guard</span> → <span class="t-strike">Strike</span> → <span class="t-power">Power Up</span> → Taunt';
   wrap.append(loop);
+  wrap.append(
+    h('p', 'muted', `${FACTION_NAME.coheed} plays as host (A)  ·  ${FACTION_NAME.cambria} plays as challenger (B)`),
+  );
   root.append(wrap);
 }
 
@@ -87,7 +173,15 @@ export function renderSeating(
   for (const seat of ['A', 'B'] as Seat[]) {
     const p = state.players[seat];
     const card = h('div', `seat-card ${p.present ? 'filled' : 'empty'}`);
-    card.append(h('div', 'seat-label', seat === 'A' ? 'Player A  ·  Host' : 'Player B'));
+    card.append(
+      h(
+        'div',
+        'seat-label',
+        seat === 'A'
+          ? `Player A  ·  ${FACTION_NAME[SEAT_FACTION.A]}${state.hostSeat === 'A' ? '  ·  Host' : ''}`
+          : `Player B  ·  ${FACTION_NAME[SEAT_FACTION.B]}${state.hostSeat === 'B' ? '  ·  Host' : ''}`,
+      ),
+    );
     card.append(h('div', 'seat-name', p.present ? p.name : 'Waiting…'));
     card.append(h('div', 'seat-conn', p.present ? (p.connected ? 'Connected' : 'Disconnected') : 'Open seat'));
     if ((you === seat) || (you === 'hotseat')) card.classList.add('yours');
@@ -96,7 +190,7 @@ export function renderSeating(
   wrap.append(grid);
   wrap.append(h('p', 'muted', `${state.spectatorCount} spectator${state.spectatorCount === 1 ? '' : 's'}`));
 
-  if (you === 'A' || you === 'hotseat') {
+  if (you === 'hotseat' || you === state.hostSeat) {
     const start = button('Start match', actions.onStart, 'gold');
     start.disabled = !state.players.A.present || !state.players.B.present;
     wrap.append(start);
@@ -112,6 +206,7 @@ export interface HudActions {
   onConfirm(): void;
   onAck(): void;
   onRematch(): void;
+  onSwapSeats(): void;
   onCopy(): void;
 }
 
@@ -154,6 +249,7 @@ export function renderHud(
     scores.append(box);
   }
   hud.append(scores);
+  hud.append(comboRail(state));
 
   const prompt = h('div', 'prompt', promptText(state, opts.you, opts.controlling));
   hud.append(prompt);
@@ -185,8 +281,11 @@ export function renderHud(
   if (state.phase === 'game_score' && canAct) {
     actions.append(button('Continue', opts.actions.onAck, 'gold'));
   }
-  if (state.phase === 'match_over' && (opts.you === 'A' || opts.you === 'hotseat')) {
-    actions.append(button('Rematch', opts.actions.onRematch, 'gold'));
+  if (state.phase === 'match_over' && opts.you !== 'spectator') {
+    actions.append(button('Swap seats', opts.actions.onSwapSeats, 'ghost'));
+    if (opts.you === 'hotseat' || opts.you === state.hostSeat) {
+      actions.append(button('Rematch', opts.actions.onRematch, 'gold'));
+    }
   }
   hud.append(actions);
 
@@ -211,11 +310,73 @@ export function renderHud(
     const w = state.matchWinner;
     pane.append(h('h2', '', w ? `${state.players[w].name} wins the match` : 'Match over'));
     pane.append(h('p', '', `${state.players.A.name} ${state.matchWins.A}  —  ${state.matchWins.B} ${state.players.B.name}`));
-    if (opts.you === 'A' || opts.you === 'hotseat') {
-      pane.append(button('Rematch', opts.actions.onRematch, 'gold'));
+    pane.append(
+      h(
+        'p',
+        'muted',
+        `${state.players.A.name} is ${FACTION_NAME[SEAT_FACTION.A]}  ·  ${state.players.B.name} is ${FACTION_NAME[SEAT_FACTION.B]}`,
+      ),
+    );
+    const row = h('div', 'row');
+    if (opts.you !== 'spectator') {
+      row.append(button('Swap seats', opts.actions.onSwapSeats, 'ghost'));
     }
+    if (opts.you === 'hotseat' || opts.you === state.hostSeat) {
+      row.append(button('Rematch', opts.actions.onRematch, 'gold'));
+    }
+    if (row.childNodes.length) pane.append(row);
     modal.append(pane);
   }
+}
+
+function comboRail(state: PrivateMatchState): HTMLElement {
+  const rail = h('div', 'combo-rail');
+  for (const seat of ['A', 'B'] as Seat[]) {
+    const faction = SEAT_FACTION[seat];
+    const plays = state.players[seat].played
+      .filter((s): s is VisiblePlayed => !!s && !s.hidden && s.id !== 'hidden')
+      .map((s) => ({ id: s.id as CardId, countered: s.countered }));
+    const lines = comboProgress(plays, faction);
+    const side = h('section', `combo-side combo-${faction}`);
+    if (lines.some((l) => l.matched > 0)) side.classList.add('hot');
+    const head = h('header', 'combo-head', `${FACTION_NAME[faction]}  ·  ${state.players[seat].name}`);
+    side.append(head);
+    for (const line of lines) {
+      side.append(comboLineEl(line));
+    }
+    rail.append(side);
+  }
+  return rail;
+}
+
+function comboLineEl(line: ReturnType<typeof comboProgress>[number]): HTMLElement {
+  const row = h('div', `combo-line${line.complete ? ' complete' : line.matched > 0 ? ' active' : ''}`);
+  const pips = h('div', 'combo-pips');
+  line.pattern.types.forEach((type, i) => {
+    const pip = h('span', 'pip');
+    pip.style.background = TYPE_COLOR[type];
+    if (i < line.matched) pip.classList.add('done');
+    else if (!line.complete && i === line.matched) pip.classList.add('next');
+    pip.textContent = TYPE_SHORT[type];
+    pips.append(pip);
+    if (i < line.pattern.types.length - 1) pips.append(h('span', 'pip-arrow', '→'));
+  });
+  row.append(pips);
+  const pts = h('span', 'combo-pts', `+${line.pattern.bonus}`);
+  row.append(pts);
+  if (line.next) {
+    row.append(h('div', 'combo-hint', `Next: ${typeHint(line.next)}`));
+  } else if (line.complete) {
+    row.append(h('div', 'combo-hint', 'Combo locked'));
+  }
+  return row;
+}
+
+function typeHint(type: CardType): string {
+  if (type === 'powerup') return 'Power Up';
+  if (type === 'strike') return 'Strike';
+  if (type === 'guard') return 'Guard';
+  return 'Taunt';
 }
 
 function canPlayerAct(

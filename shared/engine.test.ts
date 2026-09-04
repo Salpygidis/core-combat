@@ -184,48 +184,103 @@ describe('round resolution', () => {
 });
 
 describe('combo', () => {
-  it('awards +2 for two uncountered of the same type in a row', () => {
-    const { bonus } = comboBonus([
-      { id: 'strike-3', countered: false },
-      { id: 'strike-2', countered: false },
-      { id: 'taunt-3', countered: false },
-      { id: 'guard-1', countered: false },
-      { id: 'powerup-1', countered: false },
-    ]);
+  it('Coheed scores +2 for Strike → Power Up', () => {
+    const { bonus, note } = comboBonus(
+      [
+        { id: 'strike-3', countered: false },
+        { id: 'powerup-2', countered: false },
+        { id: 'taunt-3', countered: false },
+        { id: 'guard-1', countered: false },
+        { id: 'taunt-2', countered: false },
+      ],
+      'coheed',
+    );
+    expect(bonus).toBe(2);
+    expect(note).toMatch(/Strike → Power Up/);
+  });
+
+  it('Coheed scores +4 for Strike → Guard → Power Up', () => {
+    const { bonus } = comboBonus(
+      [
+        { id: 'strike-3', countered: false },
+        { id: 'guard-1', countered: false },
+        { id: 'powerup-2', countered: false },
+        { id: 'taunt-3', countered: false },
+        { id: 'taunt-2', countered: false },
+      ],
+      'coheed',
+    );
+    expect(bonus).toBe(4);
+  });
+
+  it('Cambria scores +2 for Taunt → Guard', () => {
+    const { bonus } = comboBonus(
+      [
+        { id: 'taunt-3', countered: false },
+        { id: 'guard-1', countered: false },
+        { id: 'strike-3', countered: false },
+        { id: 'powerup-2', countered: false },
+        { id: 'strike-2', countered: false },
+      ],
+      'cambria',
+    );
     expect(bonus).toBe(2);
   });
 
-  it('does not combo if one of the pair is countered', () => {
-    const { bonus } = comboBonus([
-      { id: 'strike-3', countered: false },
-      { id: 'strike-2', countered: true },
-      { id: 'taunt-3', countered: false },
-      { id: 'guard-1', countered: false },
-      { id: 'powerup-1', countered: false },
-    ]);
+  it('Cambria scores +4 for Taunt → Power Up → Strike', () => {
+    const { bonus } = comboBonus(
+      [
+        { id: 'taunt-3', countered: false },
+        { id: 'powerup-2', countered: false },
+        { id: 'strike-3', countered: false },
+        { id: 'guard-1', countered: false },
+        { id: 'strike-2', countered: false },
+      ],
+      'cambria',
+    );
+    expect(bonus).toBe(4);
+  });
+
+  it('does not combo if a card in the window is countered', () => {
+    const { bonus } = comboBonus(
+      [
+        { id: 'strike-3', countered: false },
+        { id: 'powerup-2', countered: true },
+        { id: 'taunt-3', countered: false },
+        { id: 'guard-1', countered: false },
+        { id: 'taunt-2', countered: false },
+      ],
+      'coheed',
+    );
     expect(bonus).toBe(0);
   });
 
-  it('awards +5 for three uncountered of the same type in a row', () => {
-    const { bonus } = comboBonus([
-      { id: 'strike-3', countered: false },
-      { id: 'strike-2', countered: false },
-      { id: 'strike-3', countered: false },
-      { id: 'guard-1', countered: false },
-      { id: 'powerup-1', countered: false },
-    ]);
-    expect(bonus).toBe(5);
+  it('takes the better printed combo, not the sum', () => {
+    const { bonus } = comboBonus(
+      [
+        { id: 'taunt-3', countered: false },
+        { id: 'guard-1', countered: false },
+        { id: 'taunt-2', countered: false },
+        { id: 'powerup-2', countered: false },
+        { id: 'strike-3', countered: false },
+      ],
+      'cambria',
+    );
+    expect(bonus).toBe(4);
   });
 
-  it('takes the better of two sequences, not the sum', () => {
-    const { bonus } = comboBonus([
-      { id: 'strike-3', countered: false },
-      { id: 'strike-2', countered: false },
-      { id: 'taunt-3', countered: false },
-      { id: 'taunt-2', countered: false },
-      { id: 'taunt-3', countered: false },
-    ]);
-    expect(bonus).toBe(5);
+  it('does not award the other faction\'s sequences', () => {
+    const { bonus } = comboBonus(
+      [
+        { id: 'taunt-3', countered: false },
+        { id: 'guard-1', countered: false },
+        { id: 'taunt-2', countered: false },
+        { id: 'guard-2', countered: false },
+        { id: 'strike-3', countered: false },
+      ],
+      'coheed',
+    );
+    expect(bonus).toBe(0);
   });
 });
 
@@ -246,12 +301,14 @@ describe('scoreGame', () => {
     expect(result.log.every((l) => !l.counteredA && !l.counteredB)).toBe(true);
     expect(result.breakdown.A.cores).toBe(2);
     expect(result.breakdown.B.cores).toBe(3);
-    expect(result.breakdown.A.played).toBe(3 + 2 + 1 + 1 + 2);
+    // strike-3 3 + taunt-2 3 + powerup-1 3 + guard-1 3 + powerup-2 2
+    expect(result.breakdown.A.played).toBe(3 + 3 + 3 + 3 + 2);
     // B's Power Up 2 in round 3 doubles Guard 2 in round 4 (2 → 4)
-    expect(result.breakdown.B.played).toBe(2 + 3 + 2 + 4 + 1);
+    // strike-2 2 + taunt-3 3 + powerup-2 2 + doubled guard-2 4 + powerup-1 3
+    expect(result.breakdown.B.played).toBe(2 + 3 + 2 + 4 + 3);
   });
 
-  it('Strike counters a core and the core scores its low value', () => {
+  it('Strike in an early round does not leave the core countered at scoring', () => {
     const result = scoreGame({
       coresA: [{ id: 'taunt-3', countered: false }],
       coresB: [{ id: 'guard-1', countered: false }],
@@ -260,13 +317,29 @@ describe('scoreGame', () => {
         { cardA: 'powerup-1', cardB: 'powerup-2' },
         { cardA: 'guard-2', cardB: 'guard-1' },
         { cardA: 'taunt-3', cardB: 'strike-2' },
-        { cardA: 'powerup-2', cardB: 'strike-3' },
+        { cardA: 'powerup-2', cardB: 'taunt-3' },
       ],
     });
-    // round 1: Strike vs Taunt — no type counter. Strike live, counters B's core.
     expect(result.log[0].counteredA).toBe(false);
+    expect(result.coresB[0].countered).toBe(false);
+    expect(result.breakdown.B.cores).toBe(3);
+  });
+
+  it('Strike in the last round counters a core for scoring', () => {
+    const result = scoreGame({
+      coresA: [{ id: 'taunt-3', countered: false }],
+      coresB: [{ id: 'guard-1', countered: false }],
+      rounds: [
+        { cardA: 'powerup-1', cardB: 'powerup-2' },
+        { cardA: 'guard-2', cardB: 'guard-1' },
+        { cardA: 'taunt-3', cardB: 'taunt-2' },
+        { cardA: 'powerup-2', cardB: 'taunt-2' },
+        { cardA: 'strike-3', cardB: 'powerup-1', coreTargetsA: [0] },
+      ],
+    });
+    expect(result.log[4].counteredA).toBe(false);
     expect(result.coresB[0].countered).toBe(true);
-    expect(result.breakdown.B.cores).toBe(1); // guard-1 countered value
+    expect(result.breakdown.B.cores).toBe(-2);
   });
 
   it('Guard 2 uncounters a core', () => {
@@ -285,7 +358,7 @@ describe('scoreGame', () => {
     expect(result.breakdown.A.cores).toBe(3);
   });
 
-  it('Guard 1 bonus is +2 per uncountered core if live', () => {
+  it('Guard 1 bonus is +1 per uncountered core if live', () => {
     const result = scoreGame({
       coresA: [
         { id: 'strike-3', countered: false },
@@ -305,7 +378,7 @@ describe('scoreGame', () => {
     expect(result.breakdown.A.effectNotes.join(' ')).not.toMatch(/Guard 1/);
   });
 
-  it('live Guard 1 scores +2 per uncountered core', () => {
+  it('live Guard 1 scores +1 per uncountered core', () => {
     const result = scoreGame({
       coresA: [
         { id: 'strike-3', countered: false },
@@ -321,7 +394,8 @@ describe('scoreGame', () => {
       ],
     });
     expect(result.log[0].counteredA).toBe(false);
-    expect(result.breakdown.A.effectNotes.some((n) => n.startsWith('Guard 1: +2 × 1'))).toBe(
+    // Starting countered core stands back up after round 1, so both count.
+    expect(result.breakdown.A.effectNotes.some((n) => n.startsWith('Guard 1: +1 × 2'))).toBe(
       true,
     );
   });
@@ -344,8 +418,8 @@ describe('scoreGame', () => {
     expect(result.log[0].counteredA).toBe(false);
     const notes = result.breakdown.A.effectNotes.join(' ');
     expect(notes).toMatch(/Power Up 1/);
-    // enemy countered: at least the core (already) + powerup-2 play
-    expect(result.breakdown.A.effects).toBeGreaterThanOrEqual(2);
+    // enemy countered: powerup-2 play (early core counters do not persist)
+    expect(result.breakdown.A.effects).toBeGreaterThanOrEqual(1);
   });
 
   it('Power Up 2 doubles only the next card, not cores', () => {

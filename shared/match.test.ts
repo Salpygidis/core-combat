@@ -50,7 +50,32 @@ describe('match flow', () => {
     expect(slot?.hidden).toBe(false);
     expect(slot?.countered).toBe(true);
     expect(slot?.value).toBe(0);
+    expect(m.lastRound?.coreTargetsA).toEqual([0]);
     expect(m.players.B.cores[0].countered).toBe(true);
+  });
+
+  it('clears core counters when the next round reveals', () => {
+    const m = seated();
+    pickCore(m, 'A', 'guard-2');
+    pickCore(m, 'B', 'guard-1');
+    play(m, 'A', 'strike-3');
+    play(m, 'B', 'powerup-2');
+    expect(m.players.B.cores[0].countered).toBe(true);
+    play(m, 'A', 'taunt-3');
+    play(m, 'B', 'taunt-2');
+    expect(m.players.B.cores[0].countered).toBe(false);
+  });
+
+  it('Strike 2 counters two enemy cores', () => {
+    const m = seated();
+    pickCore(m, 'A', 'guard-2');
+    pickCore(m, 'B', 'guard-1');
+    m.players.B.cores.push({ id: 'taunt-3', countered: false, hidden: false });
+    play(m, 'A', 'strike-2');
+    play(m, 'B', 'strike-3');
+    expect(m.phase).toBe('round_select');
+    expect(m.players.B.cores.every((c) => c.countered)).toBe(true);
+    expect(m.lastRound?.coreTargetsA).toEqual([0, 1]);
   });
 
   it('pauses on disconnect and resumes on reconnect', () => {
@@ -100,6 +125,33 @@ describe('match flow', () => {
       expect(m.phase).toBe('round_select');
       expect(m.gameNumber).toBe(2);
     }
+  });
+
+  it('swaps seats at match over and host follows', () => {
+    const m = seated();
+    m.phase = 'match_over';
+    m.matchWinner = 'A';
+    m.players.A.matchWins = 3;
+    m.players.B.matchWins = 1;
+    const swapped = m.apply('B', { type: 'swapSeats' });
+    expect(swapped.ok).toBe(true);
+    expect(swapped.swapped).toBe(true);
+    expect(m.players.A.name).toBe('Challenger');
+    expect(m.players.B.name).toBe('Host');
+    expect(m.hostSeat).toBe('B');
+    expect(m.matchWinner).toBe('B');
+    expect(m.players.A.matchWins).toBe(1);
+    expect(m.players.B.matchWins).toBe(3);
+    expect(m.apply('A', { type: 'rematch' }).ok).toBe(false);
+    expect(m.apply('B', { type: 'rematch' }).ok).toBe(true);
+    expect(m.phase).toBe('core_select');
+    expect(m.players.A.name).toBe('Challenger');
+    expect(m.players.B.name).toBe('Host');
+  });
+
+  it('rejects seat swap during a live game', () => {
+    const m = seated();
+    expect(m.apply('A', { type: 'swapSeats' }).ok).toBe(false);
   });
 
   it('spectators do not receive hands', () => {

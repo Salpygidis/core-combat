@@ -1,10 +1,12 @@
-import { CARD_DEFS, TYPE_PRIORITY, def } from './cards.js';
+import { CARD_DEFS, FACTION_COMBOS, FACTION_NAME, SEAT_FACTION, TYPE_PRIORITY, def } from './cards.js';
 import { counterResult } from './counters.js';
 import type {
   CardId,
+  CardType,
   ChoiceRequest,
   CoreSlot,
   EffectId,
+  Faction,
   PlayedSlot,
   RoundLog,
   ScoreBreakdown,
@@ -225,38 +227,39 @@ export function autoTargets(choice: ChoiceRequest): number[] | null {
   return null;
 }
 
+function typesMatchAt(
+  plays: { id: CardId; countered: boolean }[],
+  start: number,
+  types: CardType[],
+): boolean {
+  if (start + types.length > plays.length) return false;
+  for (let k = 0; k < types.length; k++) {
+    const p = plays[start + k];
+    if (p.countered) return false;
+    if (def(p.id).type !== types[k]) return false;
+  }
+  return true;
+}
+
 /**
- * Uncountered same-type sequences among the 5 played cards, in play order.
- * 2 in a row → +2, 3+ in a row → +5. Only the best sequence counts (max +5).
- * Cores do not count. Countered cards break a sequence.
+ * Faction sequences among the 5 played cards, in play order.
+ * Cores do not count. A countered card breaks a window.
+ * Only the best matching printed combo scores (not the sum).
  */
 export function comboBonus(
   plays: { id: CardId; countered: boolean }[],
+  faction: Faction,
 ): { bonus: number; note: string } {
   let best = 0;
   let bestNote = 'No combo';
-  let i = 0;
-  while (i < plays.length) {
-    const p = plays[i];
-    if (p.countered) {
-      i += 1;
-      continue;
-    }
-    const type = def(p.id).type;
-    let len = 0;
-    while (i < plays.length && !plays[i].countered && def(plays[i].id).type === type) {
-      len += 1;
-      i += 1;
-    }
-    let bonus = 0;
-    if (len >= 3) bonus = 5;
-    else if (len >= 2) bonus = 2;
-    if (bonus > best) {
-      best = bonus;
-      bestNote =
-        len >= 3
-          ? `${len} uncountered ${def(p.id).typeName} in a row (+5)`
-          : `2 uncountered ${def(p.id).typeName} in a row (+2)`;
+  const factionName = FACTION_NAME[faction];
+  for (const pattern of FACTION_COMBOS[faction]) {
+    for (let start = 0; start <= plays.length - pattern.types.length; start++) {
+      if (!typesMatchAt(plays, start, pattern.types)) continue;
+      if (pattern.bonus > best) {
+        best = pattern.bonus;
+        bestNote = `${factionName}: ${pattern.label} (+${pattern.bonus})`;
+      }
     }
   }
   return { bonus: best, note: bestNote };
@@ -288,10 +291,10 @@ function endGameBonuses(
     const effect = p.resolvedEffect;
     if (effect === 'plus-per-uncountered-core') {
       const n = ownCores.filter((c) => !c.countered).length;
-      const add = 2 * n;
+      const add = n;
       amount += add;
       const via = p.id === 'guard-1' ? 'Guard 1' : `${def(p.id).typeName} (copied Guard)`;
-      notes.push(`${via}: +2 × ${n} uncountered Core${n === 1 ? '' : 's'} = +${add}`);
+      notes.push(`${via}: +1 × ${n} uncountered Core${n === 1 ? '' : 's'} = +${add}`);
     }
     if (effect === 'plus-per-countered-enemy') {
       const played = enemyPlays.filter((c) => c.countered).length;
@@ -329,6 +332,10 @@ export function scoreGame(input: GameInput): GameResult {
   const playedB: typeof playedA = [];
 
   for (let r = 0; r < input.rounds.length; r++) {
+    if (r > 0) {
+      clearCoreCounters(coresA);
+      clearCoreCounters(coresB);
+    }
     const round = input.rounds[r];
     playsA.push(round.cardA);
     playsB.push(round.cardB);
@@ -407,6 +414,7 @@ export function scoreGame(input: GameInput): GameResult {
     ownCores: CoreState[],
     enemyCores: CoreState[],
     enemyPlayed: typeof playedA,
+    faction: Faction,
   ): ScoreLine => {
     const playedSum = played.reduce((s, p) => s + p.value, 0);
     const coresSum = ownCores.reduce(
@@ -414,7 +422,7 @@ export function scoreGame(input: GameInput): GameResult {
       0,
     );
     const bonuses = endGameBonuses(played, ownCores, enemyCores, enemyPlayed);
-    const combo = comboBonus(played);
+    const combo = comboBonus(played, faction);
     return {
       played: playedSum,
       cores: coresSum,
@@ -426,8 +434,8 @@ export function scoreGame(input: GameInput): GameResult {
     };
   };
 
-  const A = line(playedA, coresA, coresB, playedB);
-  const B = line(playedB, coresB, coresA, playedA);
+  const A = line(playedA, coresA, coresB, playedB, SEAT_FACTION.A);
+  const B = line(playedB, coresB, coresA, playedA, SEAT_FACTION.B);
   const winner: Seat | 'tie' = A.total > B.total ? 'A' : B.total > A.total ? 'B' : 'tie';
 
   return {
@@ -449,11 +457,12 @@ export function scoreFromBoard(
     ownCores: CoreState[],
     enemyCores: CoreState[],
     enemyPlayed: PlayedSlot[],
+    faction: Faction,
   ): ScoreLine => {
     const playedSum = played.reduce((s, p) => s + p.value, 0);
     const coresSum = ownCores.reduce((s, c) => s + coreValue(c), 0);
     const bonuses = endGameBonuses(played, ownCores, enemyCores, enemyPlayed);
-    const combo = comboBonus(played);
+    const combo = comboBonus(played, faction);
     return {
       played: playedSum,
       cores: coresSum,
@@ -464,10 +473,14 @@ export function scoreFromBoard(
       comboNote: combo.note,
     };
   };
-  const A = line(playedA, coresA, coresB, playedB);
-  const B = line(playedB, coresB, coresA, playedA);
+  const A = line(playedA, coresA, coresB, playedB, SEAT_FACTION.A);
+  const B = line(playedB, coresB, coresA, playedA, SEAT_FACTION.B);
   const winner: Seat | 'tie' = A.total > B.total ? 'A' : B.total > A.total ? 'B' : 'tie';
   return { A, B, winner };
+}
+
+export function clearCoreCounters(cores: { countered: boolean }[]): void {
+  for (const c of cores) c.countered = false;
 }
 
 export function cloneCores(cores: CoreSlot[]): CoreState[] {

@@ -22,6 +22,20 @@ function bind(socket: Socket, room: Room, role: Seat | 'spectator'): void {
   room.match.spectatorCount = room.spectators.size;
 }
 
+function rebindSeats(io: Server, room: Room): void {
+  for (const seat of SEATS) {
+    const p = room.match.players[seat];
+    if (!p.socketId) continue;
+    sessions.set(p.socketId, { code: room.code, role: seat });
+    io.to(p.socketId).emit('joined', {
+      code: room.code,
+      role: seat,
+      token: p.token,
+      host: seat === room.match.hostSeat,
+    });
+  }
+}
+
 function broadcast(io: Server, room: Room): void {
   room.match.spectatorCount = room.spectators.size;
   for (const seat of SEATS) {
@@ -131,6 +145,7 @@ export function attachSockets(io: Server): void {
         socket.emit('errorMessage', result.error ?? 'Illegal action');
         return;
       }
+      if (result.swapped) rebindSeats(io, room);
       broadcast(io, room);
     });
 

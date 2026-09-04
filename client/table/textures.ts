@@ -1,6 +1,8 @@
 import * as THREE from 'three';
-import { CARD_DEFS, COMBO_TEXT, TYPE_COLOR } from '@shared/cards';
+import { CARD_DEFS, COMBO_TEXT, TYPE_COLOR, type ComboFace } from '@shared/cards';
 import type { CardId } from '@shared/types';
+
+export type FaceId = CardId | 'back' | ComboFace;
 
 const W = 512;
 const H = 716;
@@ -38,19 +40,43 @@ function textureFromImage(img: HTMLImageElement): THREE.Texture {
   return tex;
 }
 
-export async function loadFaceTexture(id: CardId | 'combo' | 'back'): Promise<THREE.Texture> {
+export async function loadFaceTexture(id: FaceId): Promise<THREE.Texture> {
   const key = `face:${id}`;
   const hit = cache.get(key);
   if (hit) return hit;
   const promise = (async () => {
-    const img = await tryImage(`/cards/${id}.png`);
+    const img =
+      (await tryImage(`/cards/${id}.png`)) ??
+      (await tryImage(`/cards/${id}.jpg`)) ??
+      (await tryImage(`/cards/${id}.jpeg`));
     if (img) return textureFromImage(img);
     if (id === 'back') return drawBack();
-    if (id === 'combo') return drawCombo();
-    return drawPlaceholder(id);
+    if (id.startsWith('combo-')) return drawCombo();
+    return drawPlaceholder(id as CardId);
   })();
   cache.set(key, promise);
   return promise;
+}
+
+/** Texture mapped onto BoxGeometry -Y, rotated so the top matches the +Y face. */
+export async function loadAlignedFaceTexture(id: FaceId): Promise<THREE.Texture> {
+  const key = `face:${id}:aligned`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const promise = (async () => {
+    const src = await loadFaceTexture(id);
+    const aligned = src.clone();
+    aligned.center.set(0.5, 0.5);
+    aligned.rotation = Math.PI;
+    aligned.needsUpdate = true;
+    return aligned;
+  })();
+  cache.set(key, promise);
+  return promise;
+}
+
+export async function loadAlignedBackTexture(): Promise<THREE.Texture> {
+  return loadAlignedFaceTexture('back');
 }
 
 export function drawPlaceholder(id: CardId): THREE.CanvasTexture {

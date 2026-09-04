@@ -1,6 +1,7 @@
 import { DECK } from './cards.js';
 import {
   autoTargets,
+  clearCoreCounters,
   effectiveEffect,
   resolveRoundPreview,
   scoreFromBoard,
@@ -43,6 +44,7 @@ export interface InternalPlayer {
 export interface ApplyResult {
   ok: boolean;
   error?: string;
+  swapped?: boolean;
 }
 
 function emptyPlayed(): (PlayedSlot | null)[] {
@@ -177,6 +179,8 @@ export class Match {
         return this.lockWinnerCore(seat);
       case 'rematch':
         return this.rematch(seat);
+      case 'swapSeats':
+        return this.swapSeats(seat);
     }
   }
 
@@ -197,6 +201,37 @@ export class Match {
     this.phase = 'core_select';
     this.beginPick();
     return { ok: true };
+  }
+
+  /** Swap who sits A/B (and thus Coheed/Cambria). Host follows the player. */
+  private swapSeats(seat: Seat): ApplyResult {
+    if (this.phase !== 'match_over') return { ok: false, error: 'Match is not over' };
+    if (!this.players[seat].present) return { ok: false, error: 'Seat is empty' };
+    const a = this.players.A;
+    const b = this.players.B;
+    const hold = {
+      token: a.token,
+      socketId: a.socketId,
+      connected: a.connected,
+      name: a.name,
+      present: a.present,
+      matchWins: a.matchWins,
+    };
+    a.token = b.token;
+    a.socketId = b.socketId;
+    a.connected = b.connected;
+    a.name = b.name;
+    a.present = b.present;
+    a.matchWins = b.matchWins;
+    b.token = hold.token;
+    b.socketId = hold.socketId;
+    b.connected = hold.connected;
+    b.name = hold.name;
+    b.present = hold.present;
+    b.matchWins = hold.matchWins;
+    this.hostSeat = opponent(this.hostSeat);
+    if (this.matchWinner) this.matchWinner = opponent(this.matchWinner);
+    return { ok: true, swapped: true };
   }
 
   private resetMatchKeepSeats(): void {
@@ -288,6 +323,11 @@ export class Match {
   }
 
   private revealRound(): void {
+    // Cores only stay countered for the round that hit them.
+    if (this.round > 1) {
+      clearCoreCounters(this.players.A.cores);
+      clearCoreCounters(this.players.B.cores);
+    }
     const a = this.players.A;
     const b = this.players.B;
     const cardA = a.selection!;
@@ -506,6 +546,7 @@ export class Match {
       p.hand = DECK.filter((id) => !coreIds.has(id));
       p.played = emptyPlayed();
       p.pendingDouble = false;
+      clearCoreCounters(p.cores);
     }
     this.phase = 'round_select';
     this.beginPick();

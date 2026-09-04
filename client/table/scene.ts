@@ -1,8 +1,16 @@
 import * as THREE from 'three';
-import { CARD_DEFS } from '@shared/cards';
+import { CARD_DEFS, FACTION_COLOR, SEAT_FACTION } from '@shared/cards';
 import type { CardId, PrivateMatchState, Seat } from '@shared/types';
-import { CardMesh, CARD_T, typeColor } from './cardMesh';
-import { drawFelt } from './textures';
+import {
+  CardMesh,
+  CARD_H,
+  CARD_T,
+  easeInCubic,
+  easeOutCubic,
+  typeColor,
+  type CardTarget,
+} from './cardMesh';
+import { drawFelt, type FaceId } from './textures';
 
 export type Interact =
   | { mode: 'none' }
@@ -17,11 +25,19 @@ export interface HotseatExtra {
 export interface TablePicks {
   onHand(seat: Seat, cardId: CardId): void;
   onCore(owner: Seat, index: number): void;
+  onInspect(id: FaceId | null): void;
 }
 
-const HAND_Z: Record<Seat, number> = { A: 4.55, B: -4.55 };
-const PLAY_Z: Record<Seat, number> = { A: 2.35, B: -2.35 };
-const CORE_Z: Record<Seat, number> = { A: 0.95, B: -0.95 };
+export type LightId = 'hemi' | 'key' | 'fill';
+
+// Table geography (A is +Z). Combat rows sit just across center so each
+// play lands directly above the opponent's card; cores sit in front of
+// their owner; remaining hand is nearest the player.
+const ROW = CARD_H + 0.22;
+const PLAY_Z: Record<Seat, number> = { A: ROW * 0.5, B: -ROW * 0.5 };
+const CORE_Z: Record<Seat, number> = { A: PLAY_Z.A + ROW, B: PLAY_Z.B - ROW };
+const HAND_Z: Record<Seat, number> = { A: CORE_Z.A + ROW, B: CORE_Z.B - ROW };
+const COMBO_X = -4.55;
 
 export class GameTable {
   readonly renderer: THREE.WebGLRenderer;
@@ -32,12 +48,16 @@ export class GameTable {
   private pointer = new THREE.Vector2();
   private interact: Interact = { mode: 'none' };
   private hoverKey: string | null = null;
+  private inspectId: FaceId | null = null;
   private selectedKey: string | null = null;
   private targetCores = new Set<string>();
   private viewSeat: Seat | 'spectator' | 'hotseat' = 'A';
   private clock = new THREE.Clock();
   private picks: TablePicks;
-
+  private revealedPlays = new Set<string>();
+  private hemi: THREE.HemisphereLight;
+  private key: THREE.DirectionalLight;
+  private fill: THREE.DirectionalLight;
 
   constructor(canvas: HTMLCanvasElement, picks: TablePicks) {
     this.picks = picks;
@@ -53,23 +73,23 @@ export class GameTable {
     this.camera = new THREE.PerspectiveCamera(38, 1, 0.1, 80);
     this.setView('A');
 
-    const hemi = new THREE.HemisphereLight(0xfff1d6, 0x1a120c, 0.7);
-    this.scene.add(hemi);
-    const key = new THREE.DirectionalLight(0xffe6c2, 1.15);
-    key.position.set(4, 14, 8);
-    key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024);
-    key.shadow.camera.left = -10;
-    key.shadow.camera.right = 10;
-    key.shadow.camera.top = 8;
-    key.shadow.camera.bottom = -8;
-    this.scene.add(key);
-    const fill = new THREE.DirectionalLight(0x88aacc, 0.35);
-    fill.position.set(-8, 6, -4);
-    this.scene.add(fill);
+    this.hemi = new THREE.HemisphereLight(0xfff1d6, 0x1a120c, 2.00);
+    this.scene.add(this.hemi);
+    this.key = new THREE.DirectionalLight(0xffe6c2, 1.60);
+    this.key.position.set(4, 14, 8);
+    this.key.castShadow = true;
+    this.key.shadow.mapSize.set(1024, 1024);
+    this.key.shadow.camera.left = -10;
+    this.key.shadow.camera.right = 10;
+    this.key.shadow.camera.top = 8;
+    this.key.shadow.camera.bottom = -8;
+    this.scene.add(this.key);
+    this.fill = new THREE.DirectionalLight(0x88aacc, 0.90);
+    this.fill.position.set(-8, 6, -4);
+    this.scene.add(this.fill);
 
     const railMat = new THREE.MeshStandardMaterial({ color: 0x3a2416, roughness: 0.7, metalness: 0.05 });
-    const table = new THREE.Mesh(new THREE.BoxGeometry(16.5, 0.45, 11.2), railMat);
+    const table = new THREE.Mesh(new THREE.BoxGeometry(16.5, 0.45, 12.0), railMat);
     table.position.y = -0.28;
     table.receiveShadow = true;
     this.scene.add(table);
@@ -80,14 +100,14 @@ export class GameTable {
       roughness: 0.92,
       metalness: 0,
     });
-    const felt = new THREE.Mesh(new THREE.PlaneGeometry(15.2, 9.8), feltMat);
+    const felt = new THREE.Mesh(new THREE.PlaneGeometry(15.2, 10.6), feltMat);
     felt.rotation.x = -Math.PI / 2;
     felt.position.y = 0;
     felt.receiveShadow = true;
     this.scene.add(felt);
 
     const inlay = new THREE.Mesh(
-      new THREE.PlaneGeometry(14.4, 9.1),
+      new THREE.PlaneGeometry(14.4, 9.9),
       new THREE.MeshStandardMaterial({ color: 0x0f1a12, roughness: 0.95, transparent: true, opacity: 0.35 }),
     );
     inlay.rotation.x = -Math.PI / 2;
@@ -96,13 +116,27 @@ export class GameTable {
 
     canvas.addEventListener('pointerdown', (e) => this.onPointer(e));
     canvas.addEventListener('pointermove', (e) => this.onHover(e));
+    canvas.addEventListener('pointerleave', () => this.clearInspect());
     window.addEventListener('resize', () => this.resize());
     this.resize();
     this.renderer.setAnimationLoop(() => this.tick());
   }
 
-  private facingYaw(): number {
-    return this.viewSeat === 'B' ? Math.PI : 0;
+  getLightIntensities(): Record<LightId, number> {
+    return { hemi: this.hemi.intensity, key: this.key.intensity, fill: this.fill.intensity };
+  }
+
+  setLightIntensity(id: LightId, value: number): void {
+    this[id].intensity = value;
+  }
+
+  /** Cards face their owner so combat stays head-to-head. */
+  private ownerYaw(seat: Seat): number {
+    return seat === 'A' ? 0 : Math.PI;
+  }
+
+  private cardYaw(seat: Seat, countered = false): number {
+    return this.ownerYaw(seat) + (countered ? Math.PI : 0);
   }
 
   setView(view: Seat | 'spectator' | 'hotseat'): void {
@@ -135,6 +169,8 @@ export class GameTable {
 
   sync(state: PrivateMatchState, extra: HotseatExtra | null): void {
     const seen = new Set<string>();
+    const justRevealed = new Set<string>();
+    const createdPlays = new Set<string>();
 
     for (const seat of ['A', 'B'] as Seat[]) {
       const player = state.players[seat];
@@ -156,7 +192,7 @@ export class GameTable {
             y: CARD_T / 2 + 0.02,
             z: HAND_Z[seat],
             rotX: 0,
-            rotY: this.facingYaw(),
+            rotY: this.ownerYaw(seat),
             rotZ: 0,
             scale: selection === id ? 1.06 : 1,
           };
@@ -176,7 +212,7 @@ export class GameTable {
             y: CARD_T / 2 + 0.02,
             z: HAND_Z[seat],
             rotX: Math.PI,
-            rotY: this.facingYaw(),
+            rotY: this.ownerYaw(seat),
             rotZ: 0,
             scale: 1,
           };
@@ -199,13 +235,29 @@ export class GameTable {
           y: CARD_T / 2 + 0.03,
           z: PLAY_Z[seat],
           rotX: hidden ? Math.PI : 0,
-          rotY: this.facingYaw() + (!hidden && slot.countered ? Math.PI : 0),
+          rotY: this.cardYaw(seat, !hidden && slot.countered),
           rotZ: 0,
           scale: 1,
         };
         if (hidden) void mesh.setFace('back');
         else if (slot.id !== 'hidden') void mesh.setFace(slot.id, typeColor(CARD_DEFS[slot.id].type));
-        if (created) mesh.snap();
+        if (created) {
+          createdPlays.add(key);
+          if (!hidden) {
+            // Park face-down so a pair-knock can flip both together.
+            mesh.target = { ...mesh.target, rotX: Math.PI, rotY: this.ownerYaw(seat) };
+            mesh.snap();
+            mesh.target.rotX = 0;
+            mesh.target.rotY = this.cardYaw(seat, slot.countered);
+            this.revealedPlays.add(key);
+            justRevealed.add(key);
+          } else {
+            mesh.snap();
+          }
+        } else if (!hidden && !this.revealedPlays.has(key)) {
+          this.revealedPlays.add(key);
+          justRevealed.add(key);
+        }
       });
 
       player.cores.forEach((core, i) => {
@@ -221,11 +273,11 @@ export class GameTable {
         mesh.selectable = legal;
         const hidden = core.hidden || core.id === 'hidden';
         mesh.target = {
-          x: spread(Math.max(player.cores.length, 3), i, 1.38),
+          x: spread(player.cores.length, i, 1.38),
           y: CARD_T / 2 + 0.03,
           z: CORE_Z[seat],
           rotX: hidden ? Math.PI : 0,
-          rotY: this.facingYaw() + (!hidden && core.countered ? Math.PI : 0),
+          rotY: this.cardYaw(seat, !hidden && core.countered),
           rotZ: 0,
           scale: legal || this.targetCores.has(key) ? 1.07 : 1,
         };
@@ -241,30 +293,108 @@ export class GameTable {
       combo.meta = { kind: 'combo', seat, index: 0 };
       combo.selectable = false;
       combo.target = {
-        x: 6.15,
+        x: COMBO_X,
         y: CARD_T / 2 + 0.02,
         z: PLAY_Z[seat],
         rotX: 0,
-        rotY: this.facingYaw(),
+        rotY: this.ownerYaw(seat),
         rotZ: 0,
         scale: 0.92,
       };
-      void combo.setFace('combo');
+      void combo.setCombo(SEAT_FACTION[seat], seat === 'B');
       if (comboNew) combo.snap();
     }
+
+    this.playRevealedKnocks(state, justRevealed, createdPlays);
 
     for (const [key, mesh] of this.cards) {
       if (!seen.has(key)) {
         this.scene.remove(mesh.group);
         this.cards.delete(key);
+        this.revealedPlays.delete(key);
       }
     }
+  }
+
+  private playRevealedKnocks(
+    state: PrivateMatchState,
+    justRevealed: Set<string>,
+    createdPlays: Set<string>,
+  ): void {
+    if (!justRevealed.size) return;
+    for (let i = 0; i < 5; i++) {
+      const keyA = `play:A:${i}`;
+      const keyB = `play:B:${i}`;
+      if (!justRevealed.has(keyA) && !justRevealed.has(keyB)) continue;
+      // Both brand-new this frame = late join, not a live reveal.
+      if (createdPlays.has(keyA) && createdPlays.has(keyB)) continue;
+      const slotA = state.players.A.played[i];
+      const slotB = state.players.B.played[i];
+      if (!slotA || !slotB || slotA.hidden || slotB.hidden) continue;
+      if (slotA.countered === slotB.countered) continue;
+      const winnerSeat: Seat = slotA.countered ? 'B' : 'A';
+      const loserSeat: Seat = winnerSeat === 'A' ? 'B' : 'A';
+      const winner = this.cards.get(`play:${winnerSeat}:${i}`);
+      const loser = this.cards.get(`play:${loserSeat}:${i}`);
+      if (!winner || !loser || winner.busy() || loser.busy()) continue;
+      this.playCounterKnock(winner, loser, winnerSeat);
+    }
+  }
+
+  private playCounterKnock(winner: CardMesh, loser: CardMesh, winnerSeat: Seat): void {
+    const loserSeat: Seat = winnerSeat === 'A' ? 'B' : 'A';
+    const winYaw = this.ownerYaw(winnerSeat);
+    const loseYaw = this.ownerYaw(loserSeat);
+    const dir = winnerSeat === 'A' ? -1 : 1;
+    const wRest: CardTarget = { ...winner.target, rotY: winYaw };
+    const lRest: CardTarget = { ...loser.target, rotY: this.cardYaw(loserSeat, true) };
+    loser.target = lRest;
+    winner.target = wRest;
+
+    const faceUpW: CardTarget = { ...wRest, rotX: 0, rotY: winYaw, rotZ: 0 };
+    const faceUpL: CardTarget = { ...lRest, rotX: 0, rotY: loseYaw, rotZ: 0 };
+    const lunge: CardTarget = {
+      ...faceUpW,
+      z: wRest.z + dir * 0.4,
+      y: 0.34,
+      rotX: dir * 0.32,
+      scale: 1.05,
+    };
+    const hit: CardTarget = {
+      ...faceUpL,
+      z: lRest.z + dir * 0.24,
+      y: 0.46,
+      rotY: loseYaw + Math.PI,
+      rotZ: -dir * 0.6,
+      scale: 1.03,
+    };
+    const spinRest: CardTarget = { ...lRest, rotY: loseYaw + Math.PI * 3 };
+
+    winner.playMotion([
+      { duration: 0.32, to: faceUpW, ease: easeOutCubic },
+      { duration: 0.14, to: lunge, ease: easeInCubic },
+      { duration: 0.3, to: wRest, ease: easeOutCubic },
+    ]);
+    loser.playMotion(
+      [
+        { duration: 0.32, to: faceUpL, ease: easeOutCubic },
+        { duration: 0.12, to: faceUpL },
+        { duration: 0.16, to: hit, ease: easeOutCubic },
+        { duration: 0.5, to: spinRest, ease: easeOutCubic },
+      ],
+      () => loser.unwrapYaw(),
+    );
   }
 
   private ensure(key: string, id: CardId | 'combo' | 'back'): { mesh: CardMesh; created: boolean } {
     let mesh = this.cards.get(key);
     if (!mesh) {
-      const color = id === 'combo' || id === 'back' ? '#3a1810' : typeColor(CARD_DEFS[id].type);
+      const color =
+        id === 'combo'
+          ? FACTION_COLOR[SEAT_FACTION[key.startsWith('combo:B') ? 'B' : 'A']]
+          : id === 'back'
+            ? '#1a1a1a'
+            : typeColor(CARD_DEFS[id].type);
       mesh = new CardMesh(key, color);
       this.cards.set(key, mesh);
       this.scene.add(mesh.group);
@@ -302,7 +432,28 @@ export class GameTable {
     this.ndc(e);
     const card = this.hit();
     this.hoverKey = card?.selectable ? card.key : null;
-    this.renderer.domElement.style.cursor = this.hoverKey ? 'pointer' : 'default';
+    const inspect = card ? this.peekId(card) : null;
+    this.renderer.domElement.style.cursor = this.hoverKey ? 'pointer' : inspect ? 'zoom-in' : 'default';
+    this.setInspect(inspect);
+  }
+
+  private peekId(card: CardMesh): FaceId | null {
+    if (card.meta.kind === 'combo') return card.faceId;
+    if (card.faceId === 'back') return null;
+    if (card.meta.cardId) return card.meta.cardId;
+    return null;
+  }
+
+  private setInspect(id: FaceId | null): void {
+    if (id === this.inspectId) return;
+    this.inspectId = id;
+    this.picks.onInspect(id);
+  }
+
+  private clearInspect(): void {
+    this.hoverKey = null;
+    this.renderer.domElement.style.cursor = 'default';
+    this.setInspect(null);
   }
 
   private onPointer(e: PointerEvent): void {

@@ -1,5 +1,6 @@
 export type Seat = 'A' | 'B';
 export type Role = Seat | 'spectator';
+export type Faction = 'coheed' | 'cambria';
 
 export type CardType = 'strike' | 'guard' | 'taunt' | 'powerup';
 
@@ -109,7 +110,8 @@ export type Intent =
   | { type: 'ackScore' }
   | { type: 'selectWinnerCore'; cardId: CardId }
   | { type: 'lockWinnerCore' }
-  | { type: 'rematch' };
+  | { type: 'rematch' }
+  | { type: 'swapSeats' };
 
 export type HiddenId = CardId | 'hidden';
 
