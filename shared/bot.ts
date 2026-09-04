@@ -121,7 +121,7 @@ function evaluatePair(match: Match, seat: Seat, myId: CardId, theirId: CardId): 
   score += after - before;
   if (theirCountered) score += 0.35;
   if (myCountered) score -= 0.35;
-  score -= 0.15 * counters(def(theirId).type, def(myId).type);
+  if (counters(def(theirId).type, def(myId).type)) score -= 0.15;
   return score;
 }
 
