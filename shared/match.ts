@@ -165,10 +165,14 @@ export class Match {
         return this.selectFromHand(seat, intent.cardId, 'core_select');
       case 'lockCore':
         return this.lockCore(seat);
+      case 'playCore':
+        return this.playThenLock(seat, intent.cardId, 'core_select', () => this.lockCore(seat));
       case 'selectCard':
         return this.selectFromHand(seat, intent.cardId, 'round_select');
       case 'lockCard':
         return this.lockCard(seat);
+      case 'playCard':
+        return this.playThenLock(seat, intent.cardId, 'round_select', () => this.lockCard(seat));
       case 'chooseTargets':
         return this.chooseTargets(seat, intent.indices);
       case 'ackScore':
@@ -177,6 +181,11 @@ export class Match {
         return this.selectWinnerCore(seat, intent.cardId);
       case 'lockWinnerCore':
         return this.lockWinnerCore(seat);
+      case 'playWinnerCore': {
+        const sel = this.selectWinnerCore(seat, intent.cardId);
+        if (!sel.ok) return sel;
+        return this.lockWinnerCore(seat);
+      }
       case 'rematch':
         return this.rematch(seat);
       case 'swapSeats':
@@ -274,6 +283,17 @@ export class Match {
     return { ok: true };
   }
 
+  private playThenLock(
+    seat: Seat,
+    cardId: CardId,
+    expected: Phase,
+    lock: () => ApplyResult,
+  ): ApplyResult {
+    const sel = this.selectFromHand(seat, cardId, expected);
+    if (!sel.ok) return sel;
+    return lock();
+  }
+
   private lockCore(seat: Seat): ApplyResult {
     if (this.phase !== 'core_select') return { ok: false, error: 'Not selecting cores' };
     const p = this.players[seat];
@@ -323,11 +343,6 @@ export class Match {
   }
 
   private revealRound(): void {
-    // Cores only stay countered for the round that hit them.
-    if (this.round > 1) {
-      clearCoreCounters(this.players.A.cores);
-      clearCoreCounters(this.players.B.cores);
-    }
     const a = this.players.A;
     const b = this.players.B;
     const cardA = a.selection!;
@@ -546,6 +561,7 @@ export class Match {
       p.hand = DECK.filter((id) => !coreIds.has(id));
       p.played = emptyPlayed();
       p.pendingDouble = false;
+      // Cores stay countered for the whole 5-card game; they stand back up here.
       clearCoreCounters(p.cores);
     }
     this.phase = 'round_select';

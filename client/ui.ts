@@ -202,7 +202,6 @@ export function renderSeating(
 }
 
 export interface HudActions {
-  onLock(): void;
   onConfirm(): void;
   onAck(): void;
   onRematch(): void;
@@ -256,22 +255,6 @@ export function renderHud(
 
   const actions = h('div', 'hud-actions');
   const canAct = canPlayerAct(state, opts.you, opts.controlling);
-  if (canAct && (state.phase === 'core_select' || state.phase === 'winner_core' || state.phase === 'round_select')) {
-    const label = state.phase === 'round_select' ? 'Lock card' : 'Lock Core';
-    const b = button(label, opts.actions.onLock, 'gold');
-    const locked = opts.you === 'hotseat'
-      ? opts.controlling
-        ? state.players[opts.controlling].locked
-        : true
-      : state.myLocked;
-    const selected = opts.you === 'hotseat'
-      ? opts.controlling
-        ? state.players[opts.controlling].selected
-        : false
-      : state.mySelection !== null;
-    b.disabled = locked || !selected;
-    actions.append(b);
-  }
   if (canAct && state.phase === 'round_choice' && state.choice) {
     const need = Math.min(state.choice.needed, state.choice.legal.length);
     const b = button(`Confirm (${opts.targetCount}/${need})`, opts.actions.onConfirm, 'gold');
@@ -287,7 +270,7 @@ export function renderHud(
       actions.append(button('Rematch', opts.actions.onRematch, 'gold'));
     }
   }
-  hud.append(actions);
+  if (actions.childNodes.length) hud.append(actions);
 
   if (opts.error) {
     const toast = h('div', 'toast', opts.error);
@@ -404,12 +387,12 @@ function promptText(
       return 'Seating';
     case 'core_select':
       return seat && state.waitingSeats.includes(seat)
-        ? 'Pick 1 card as your Core — hidden until both lock'
-        : `Waiting for ${names(state.waitingSeats)} to lock a Core`;
+        ? 'Drag 1 card onto your Core space — hidden until both play'
+        : `Waiting for ${names(state.waitingSeats)} to play a Core`;
     case 'round_select':
       return seat && state.waitingSeats.includes(seat)
-        ? `Round ${state.round}: pick 1 card from your hand`
-        : `Waiting for ${names(state.waitingSeats)} to lock`;
+        ? `Round ${state.round}: drag a card onto the highlighted space`
+        : `Waiting for ${names(state.waitingSeats)} to play`;
     case 'round_choice': {
       const c = state.choice;
       if (!c) return 'Resolving…';
@@ -420,7 +403,7 @@ function promptText(
       return 'Game scored';
     case 'winner_core':
       return seat && state.waitingSeats.includes(seat)
-        ? 'You won. Park 1 more Core (hidden until you confirm)'
+        ? 'You won. Drag 1 card onto your Core row'
         : `${names(state.waitingSeats)} is parking a Core`;
     case 'match_over':
       return 'Match over';

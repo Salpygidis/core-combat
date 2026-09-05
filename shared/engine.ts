@@ -332,10 +332,6 @@ export function scoreGame(input: GameInput): GameResult {
   const playedB: typeof playedA = [];
 
   for (let r = 0; r < input.rounds.length; r++) {
-    if (r > 0) {
-      clearCoreCounters(coresA);
-      clearCoreCounters(coresB);
-    }
     const round = input.rounds[r];
     playsA.push(round.cardA);
     playsB.push(round.cardB);

@@ -165,6 +165,22 @@ describe('round resolution', () => {
     expect(r.choiceQueue.map((c) => c.seat)).toEqual(['A']);
   });
 
+  it('Guard 1 does not ask to uncounter a core', () => {
+    const r = resolveRoundPreview(
+      'guard-1',
+      'powerup-2',
+      ['guard-1'],
+      ['powerup-2'],
+      0,
+      false,
+      false,
+      [{ id: 'strike-3', countered: true }],
+      [{ id: 'taunt-3', countered: false }],
+    );
+    expect(r.effectiveA).toBe('plus-per-uncountered-core');
+    expect(r.choiceQueue).toEqual([]);
+  });
+
   it('both live Strikes: host (A) chooses first', () => {
     const r = resolveRoundPreview(
       'strike-3',
@@ -308,7 +324,7 @@ describe('scoreGame', () => {
     expect(result.breakdown.B.played).toBe(2 + 3 + 2 + 4 + 3);
   });
 
-  it('Strike in an early round does not leave the core countered at scoring', () => {
+  it('Strike in an early round leaves the core countered until uncountered', () => {
     const result = scoreGame({
       coresA: [{ id: 'taunt-3', countered: false }],
       coresB: [{ id: 'guard-1', countered: false }],
@@ -321,8 +337,8 @@ describe('scoreGame', () => {
       ],
     });
     expect(result.log[0].counteredA).toBe(false);
-    expect(result.coresB[0].countered).toBe(false);
-    expect(result.breakdown.B.cores).toBe(3);
+    expect(result.coresB[0].countered).toBe(true);
+    expect(result.breakdown.B.cores).toBe(-2);
   });
 
   it('Strike in the last round counters a core for scoring', () => {
@@ -394,10 +410,28 @@ describe('scoreGame', () => {
       ],
     });
     expect(result.log[0].counteredA).toBe(false);
-    // Starting countered core stands back up after round 1, so both count.
-    expect(result.breakdown.A.effectNotes.some((n) => n.startsWith('Guard 1: +1 × 2'))).toBe(
+    expect(result.coresA[1].countered).toBe(true);
+    expect(result.breakdown.A.effectNotes.some((n) => n.startsWith('Guard 1: +1 × 1'))).toBe(
       true,
     );
+  });
+
+  it('Guard 1 does not uncounter a core', () => {
+    const result = scoreGame({
+      coresA: [{ id: 'strike-3', countered: true }],
+      coresB: [{ id: 'taunt-3', countered: false }],
+      rounds: [
+        { cardA: 'guard-1', cardB: 'powerup-2' },
+        { cardA: 'powerup-1', cardB: 'taunt-2' },
+        { cardA: 'strike-2', cardB: 'strike-3' },
+        { cardA: 'taunt-2', cardB: 'powerup-1' },
+        { cardA: 'powerup-2', cardB: 'guard-2' },
+      ],
+    });
+    expect(result.log[0].effectA).toBe('plus-per-uncountered-core');
+    expect(result.log[0].uncounterA).toBe(null);
+    expect(result.coresA[0].countered).toBe(true);
+    expect(result.breakdown.A.effectNotes.join(' ')).not.toMatch(/Guard 1: \+1 × [1-9]/);
   });
 
   it('Power Up 1 counts countered enemy plays and cores at end of game', () => {
@@ -418,7 +452,7 @@ describe('scoreGame', () => {
     expect(result.log[0].counteredA).toBe(false);
     const notes = result.breakdown.A.effectNotes.join(' ');
     expect(notes).toMatch(/Power Up 1/);
-    // enemy countered: powerup-2 play (early core counters do not persist)
+    expect(result.coresB[0].countered).toBe(true);
     expect(result.breakdown.A.effects).toBeGreaterThanOrEqual(1);
   });
 

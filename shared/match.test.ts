@@ -54,7 +54,7 @@ describe('match flow', () => {
     expect(m.players.B.cores[0].countered).toBe(true);
   });
 
-  it('clears core counters when the next round reveals', () => {
+  it('core counters persist through later rounds', () => {
     const m = seated();
     pickCore(m, 'A', 'guard-2');
     pickCore(m, 'B', 'guard-1');
@@ -63,7 +63,56 @@ describe('match flow', () => {
     expect(m.players.B.cores[0].countered).toBe(true);
     play(m, 'A', 'taunt-3');
     play(m, 'B', 'taunt-2');
-    expect(m.players.B.cores[0].countered).toBe(false);
+    expect(m.players.B.cores[0].countered).toBe(true);
+  });
+
+  it('Guard 1 does not uncounter a core', () => {
+    const m = seated();
+    pickCore(m, 'A', 'guard-2');
+    pickCore(m, 'B', 'taunt-3');
+    play(m, 'A', 'strike-3');
+    play(m, 'B', 'powerup-2');
+    expect(m.players.B.cores[0].countered).toBe(true);
+    play(m, 'A', 'powerup-1');
+    play(m, 'B', 'guard-1');
+    expect(m.players.B.cores[0].countered).toBe(true);
+    expect(m.phase).not.toBe('round_choice');
+    expect(m.lastRound?.uncounterB).toBe(null);
+    expect(m.lastRound?.effectB).toBe('plus-per-uncountered-core');
+  });
+
+  it('resets core counters after the 5-card game, not between rounds', () => {
+    const m = seated();
+    pickCore(m, 'A', 'guard-2');
+    pickCore(m, 'B', 'guard-1');
+    play(m, 'A', 'strike-3');
+    play(m, 'B', 'powerup-2');
+    expect(m.players.B.cores[0].countered).toBe(true);
+    play(m, 'A', 'taunt-3');
+    play(m, 'B', 'taunt-2');
+    play(m, 'A', 'powerup-1');
+    play(m, 'B', 'powerup-1');
+    play(m, 'A', 'strike-2');
+    play(m, 'B', 'strike-2');
+    while (m.phase === 'round_choice') {
+      const choice = m.choiceQueue[0];
+      m.apply(choice.seat, { type: 'chooseTargets', indices: choice.legal.slice(0, choice.needed) });
+    }
+    expect(m.players.B.cores[0].countered).toBe(true);
+    play(m, 'A', 'taunt-2');
+    play(m, 'B', 'taunt-3');
+    expect(m.phase).toBe('game_score');
+    expect(m.players.B.cores[0].countered).toBe(true);
+    m.apply('A', { type: 'ackScore' });
+    m.apply('B', { type: 'ackScore' });
+    if (m.phase === 'winner_core') {
+      const winner = m.scoreBreakdown!.winner as Seat;
+      const card = m.players[winner].hand[0];
+      expect(m.apply(winner, { type: 'playWinnerCore', cardId: card }).ok).toBe(true);
+    }
+    expect(m.phase).toBe('round_select');
+    expect(m.players.A.cores.every((c) => !c.countered)).toBe(true);
+    expect(m.players.B.cores.every((c) => !c.countered)).toBe(true);
   });
 
   it('Strike 2 counters two enemy cores', () => {
@@ -161,5 +210,19 @@ describe('match flow', () => {
     const spec = m.getPrivateState('spectator');
     expect(spec.hand).toEqual([]);
     expect(spec.players.A.handCount).toBe(7);
+  });
+
+  it('playCore and playCard lock in one action', () => {
+    const m = seated();
+    expect(m.apply('A', { type: 'playCore', cardId: 'strike-3' }).ok).toBe(true);
+    expect(m.players.A.locked).toBe(true);
+    expect(m.players.A.cores[0]?.id).toBe('strike-3');
+    expect(m.players.A.hand).not.toContain('strike-3');
+    expect(m.apply('B', { type: 'playCore', cardId: 'guard-1' }).ok).toBe(true);
+    expect(m.phase).toBe('round_select');
+    expect(m.apply('A', { type: 'playCard', cardId: 'strike-2' }).ok).toBe(true);
+    expect(m.players.A.played[0]?.hidden).toBe(true);
+    expect(m.players.A.hand).not.toContain('strike-2');
+    expect(m.apply('A', { type: 'playCard', cardId: 'taunt-3' }).ok).toBe(false);
   });
 });

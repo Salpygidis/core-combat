@@ -10,7 +10,7 @@ import {
   saveSession,
   type Joined,
 } from './net';
-import { GameTable } from './table/scene';
+import { GameTable, type DropSlot } from './table/scene';
 import { h, renderHome, renderHud, renderSettings, renderSeating } from './ui';
 
 export class App {
@@ -172,7 +172,7 @@ export class App {
     this.peek = peek;
     this.peekImg = peekImg;
     this.table = new GameTable(canvas, {
-      onHand: (_seat, cardId) => this.pickHand(cardId),
+      onPlay: (_seat, cardId) => this.playHand(cardId),
       onCore: (_owner, index) => this.pickCore(index),
       onInspect: (id) => this.showPeek(id),
     });
@@ -234,17 +234,19 @@ export class App {
     const interactSeat = you === 'hotseat' ? this.controlling : you === 'spectator' ? null : you;
     const waiting = interactSeat !== null && state.waitingSeats.includes(interactSeat);
 
+    const drops = dropSlots(state, interactSeat, waiting);
     if (waiting && (state.phase === 'core_select' || state.phase === 'round_select' || state.phase === 'winner_core') && interactSeat) {
-      this.table.setInteract({ mode: 'hand', seat: interactSeat }, selectedKey, []);
+      this.table.setInteract({ mode: 'hand', seat: interactSeat }, selectedKey, [], drops);
     } else if (waiting && state.phase === 'round_choice' && state.choice && interactSeat === state.choice.seat) {
       const owner = state.choice.kind === 'counter-cores' ? (state.choice.seat === 'A' ? 'B' : 'A') : state.choice.seat;
       this.table.setInteract(
         { mode: 'cores', owner, legal: state.choice.legal },
         selectedKey,
         this.targets.map((i) => `core:${owner}:${i}`),
+        drops,
       );
     } else {
-      this.table.setInteract({ mode: 'none' }, selectedKey, []);
+      this.table.setInteract({ mode: 'none' }, selectedKey, [], drops);
     }
 
     this.table.sync(state, extra);
@@ -255,7 +257,6 @@ export class App {
       targetCount: this.targets.length,
       error: this.error,
       actions: {
-        onLock: () => this.lock(),
         onConfirm: () => this.confirmTargets(),
         onAck: () => this.act({ type: 'ackScore' }),
         onRematch: () => this.act({ type: 'rematch' }),
@@ -282,12 +283,11 @@ export class App {
     this.peek.hidden = false;
   }
 
-  private pickHand(cardId: CardId): void {
-    const state = this.state;
-    if (!state) return;
-    if (state.phase === 'core_select') this.act({ type: 'selectCore', cardId });
-    else if (state.phase === 'winner_core') this.act({ type: 'selectWinnerCore', cardId });
-    else if (state.phase === 'round_select') this.act({ type: 'selectCard', cardId });
+  private playHand(cardId: CardId): void {
+    const phase = this.state?.phase;
+    if (phase === 'core_select') this.act({ type: 'playCore', cardId });
+    else if (phase === 'winner_core') this.act({ type: 'playWinnerCore', cardId });
+    else if (phase === 'round_select') this.act({ type: 'playCard', cardId });
   }
 
   private pickCore(index: number): void {
@@ -301,13 +301,6 @@ export class App {
       this.targets = [...this.targets, index];
     }
     this.paint();
-  }
-
-  private lock(): void {
-    const phase = this.state?.phase;
-    if (phase === 'core_select') this.act({ type: 'lockCore' });
-    else if (phase === 'winner_core') this.act({ type: 'lockWinnerCore' });
-    else if (phase === 'round_select') this.act({ type: 'lockCard' });
   }
 
   private confirmTargets(): void {
@@ -412,4 +405,45 @@ export class App {
     }
     this.paint();
   }
+}
+
+function dropSlots(
+  state: PrivateMatchState,
+  interactSeat: Seat | null,
+  waiting: boolean,
+): DropSlot[] {
+  const drops: DropSlot[] = [];
+  if (state.phase === 'round_select') {
+    const index = state.round - 1;
+    for (const seat of ['A', 'B'] as Seat[]) {
+      if (state.players[seat].played[index]) continue;
+      drops.push({
+        kind: 'play',
+        seat,
+        index,
+        accept: waiting && interactSeat === seat,
+      });
+    }
+  } else if (state.phase === 'core_select') {
+    for (const seat of ['A', 'B'] as Seat[]) {
+      if (state.players[seat].cores.length > 0) continue;
+      drops.push({
+        kind: 'core',
+        seat,
+        index: 0,
+        accept: waiting && interactSeat === seat,
+      });
+    }
+  } else if (state.phase === 'winner_core') {
+    const winner = state.scoreBreakdown?.winner;
+    if (winner === 'A' || winner === 'B') {
+      drops.push({
+        kind: 'core',
+        seat: winner,
+        index: state.players[winner].cores.length,
+        accept: waiting && interactSeat === winner,
+      });
+    }
+  }
+  return drops;
 }

@@ -104,12 +104,15 @@ export type Intent =
   | { type: 'startMatch' }
   | { type: 'selectCore'; cardId: CardId }
   | { type: 'lockCore' }
+  | { type: 'playCore'; cardId: CardId }
   | { type: 'selectCard'; cardId: CardId }
   | { type: 'lockCard' }
+  | { type: 'playCard'; cardId: CardId }
   | { type: 'chooseTargets'; indices: number[] }
   | { type: 'ackScore' }
   | { type: 'selectWinnerCore'; cardId: CardId }
   | { type: 'lockWinnerCore' }
+  | { type: 'playWinnerCore'; cardId: CardId }
   | { type: 'rematch' }
   | { type: 'swapSeats' };
 
